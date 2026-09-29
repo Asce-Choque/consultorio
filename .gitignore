@@ -1,0 +1,18 @@
+# Entorno virtual de Python
+.venv/
+venv/
+env/
+
+# Archivos de caché de Python
+__pycache__/
+*.pyc
+
+# Base de datos local (para no subir datos de prueba)
+*.db
+consultorio.db
+
+# Configuración local de VS Code
+.vscode/
+
+# Archivos de variables de entorno / claves
+.env

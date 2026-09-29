@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Consultorio - Gestión de pacientes</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-row">
+          <div class="brand">
+            <div class="brand-mark">C</div>
+            <div>
+              <h1>Consultorio</h1>
+              <p>Gestión de pacientes</p>
+              <time id="currentDate" class="current-date"></time>
+            </div>
+          </div>
+
+          <div class="summary-strip" aria-label="Resumen del día">
+            <div class="stat-card stat-primary">
+              <span class="stat-label">Hoy</span>
+              <strong id="todayCounter">0</strong>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Atenciones</span>
+              <strong id="attendanceCounter">0</strong>
+            </div>
+            <div class="stat-card stat-success">
+              <span class="stat-label">Estado</span>
+              <strong>Activo</strong>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="main-grid">
+        <section class="panel panel-primary">
+          <div class="search-block">
+            <label for="dniInput">DNI del paciente</label>
+            <div class="input-row">
+              <input id="dniInput" type="text" placeholder="Ingrese DNI" maxlength="12" />
+              <button id="buscarBtn" type="button">Buscar</button>
+            </div>
+            <div id="statusMessage" class="status-message" aria-live="polite"></div>
+          </div>
+
+          <form id="registroForm" class="registro-form hidden" novalidate>
+            <h2>Registrar nuevo paciente</h2>
+            <div class="field-grid">
+              <div class="field">
+                <label for="nombreInput">Nombre</label>
+                <input id="nombreInput" type="text" placeholder="Ej: Ana" />
+              </div>
+              <div class="field">
+                <label for="apellidoInput">Apellido</label>
+                <input id="apellidoInput" type="text" placeholder="Ej: García" />
+              </div>
+              <div class="field field-full">
+                <label for="telefonoInput">Teléfono</label>
+                <input id="telefonoInput" type="text" placeholder="Opcional" />
+              </div>
+            </div>
+            <button id="registrarBtn" class="primary-btn" type="submit">Registrar atención</button>
+          </form>
+        </section>
+
+        <aside class="panel panel-secondary">
+          <div class="panel-header">
+            <h2>Atenciones de hoy</h2>
+            <div class="button-group">
+              <button id="downloadPdfBtn" class="secondary-btn" type="button">Descargar PDF</button>
+            </div>
+          </div>
+          <ul id="atencionesList" class="attendance-list"></ul>
+        </aside>
+      </main>
+    </div>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+    <script>
+      const dniInput = document.getElementById('dniInput');
+      const statusMessage = document.getElementById('statusMessage');
+      const registroForm = document.getElementById('registroForm');
+      const nombreInput = document.getElementById('nombreInput');
+      const apellidoInput = document.getElementById('apellidoInput');
+      const telefonoInput = document.getElementById('telefonoInput');
+      const atencionesList = document.getElementById('atencionesList');
+      const toast = document.getElementById('toast');
+      const currentDate = document.getElementById('currentDate');
+      const argentinaTimeZone = 'America/Argentina/Buenos_Aires';
+
+      function fechaActualArgentina() {
+        const partes = new Intl.DateTimeFormat('en', {
+          timeZone: argentinaTimeZone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).formatToParts(new Date());
+        const valores = Object.fromEntries(partes.map(({ type, value }) => [type, value]));
+        return `${valores.year}-${valores.month}-${valores.day}`;
+      }
+
+      function actualizarFecha() {
+        currentDate.textContent = new Intl.DateTimeFormat('es-AR', {
+          timeZone: argentinaTimeZone,
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric'
+        }).format(new Date());
+      }
+
+      let fechaPlanilla = fechaActualArgentina();
+      actualizarFecha();
+
+      let pacienteActual = null;
+
+      function setStatus(message, type = 'info') {
+        statusMessage.textContent = message;
+        statusMessage.className = 'status-message ' + type;
+      }
+
+      function showToast(message, type = 'success') {
+        toast.textContent = message;
+        toast.className = 'toast ' + type;
+        clearTimeout(showToast.timeoutId);
+        showToast.timeoutId = setTimeout(() => {
+          toast.className = 'toast hidden';
+        }, 3500);
+      }
+
+      function formatNombreCompleto(paciente) {
+        return `${paciente.nombre} ${paciente.apellido}`.trim();
+      }
+
+      async function verificarCambioDeDia() {
+        const fechaHoy = fechaActualArgentina();
+        if (fechaHoy === fechaPlanilla) return;
+
+        fechaPlanilla = fechaHoy;
+        actualizarFecha();
+        await cargarAtencionesHoy();
+      }
+
+      async function buscarPaciente() {
+        const dni = dniInput.value.trim();
+
+        if (!dni) {
+          setStatus('Ingrese un DNI para continuar.', 'error');
+          return;
+        }
+
+        setStatus('Buscando paciente...', 'info');
+
+        try {
+          const response = await fetch(`/api/buscar/${dni}`);
+          const data = await response.json();
+
+          if (!response.ok || !data.encontrado) {
+            pacienteActual = null;
+            registroForm.classList.remove('hidden');
+            nombreInput.focus();
+            setStatus('Paciente no registrado. Complete los datos del alta.', 'warning');
+            return;
+          }
+
+          pacienteActual = data.paciente;
+          registroForm.classList.add('hidden');
+          setStatus(`Paciente encontrado: ${formatNombreCompleto(data.paciente)}`, 'success');
+          await registrarAtencion();
+        } catch (error) {
+          setStatus('No se pudo buscar el paciente.', 'error');
+        }
+      }
+
+      async function registrarAtencion() {
+        const dni = dniInput.value.trim();
+        const payload = { dni };
+
+        if (!pacienteActual) {
+          payload.nombre = nombreInput.value.trim();
+          payload.apellido = apellidoInput.value.trim();
+          payload.telefono = telefonoInput.value.trim();
+        }
+
+        try {
+          const response = await fetch('/api/atencion', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            setStatus(data.mensaje || 'No se pudo registrar la atención.', 'error');
+            return;
+          }
+
+          showToast(data.mensaje, 'success');
+          setStatus('Atención registrada correctamente.', 'success');
+          dniInput.value = '';
+          nombreInput.value = '';
+          apellidoInput.value = '';
+          telefonoInput.value = '';
+          registroForm.classList.add('hidden');
+          pacienteActual = null;
+          await cargarAtencionesHoy();
+        } catch (error) {
+          setStatus('Error al registrar la atención.', 'error');
+        }
+      }
+
+      async function cargarAtencionesHoy() {
+        try {
+          const response = await fetch('/api/atenciones-hoy');
+          const data = await response.json();
+          const atenciones = data.atenciones || [];
+
+          const todayCounter = document.getElementById('todayCounter');
+          const attendanceCounter = document.getElementById('attendanceCounter');
+
+          if (todayCounter) todayCounter.textContent = String(atenciones.length);
+          if (attendanceCounter) attendanceCounter.textContent = String(atenciones.length);
+
+          if (!atenciones.length) {
+            atencionesList.innerHTML = '<li class="empty-state">No hay atenciones para hoy.</li>';
+            return;
+          }
+
+          atencionesList.innerHTML = atenciones
+            .map(
+              (item) => `
+                <li class="attendance-item" data-id="${item.id_atencion}">
+                  <div class="attendance-meta">
+                    <span class="dni-chip">${item.dni}</span>
+                    <span class="time-badge">${item.hora}</span>
+                  </div>
+                  <div class="attendance-row">
+                    <strong>${item.nombre} ${item.apellido}</strong>
+                    <button class="delete-btn" type="button" data-id="${item.id_atencion}" title="Eliminar del historial">Eliminar</button>
+                  </div>
+                </li>
+              `
+            )
+            .join('');
+
+          document.querySelectorAll('.delete-btn').forEach((button) => {
+            button.addEventListener('click', async (event) => {
+              const id = Number(event.currentTarget.dataset.id);
+              if (!id) return;
+
+              try {
+                const response = await fetch(`/api/atencion/${id}`, { method: 'DELETE' });
+                const data = await response.json();
+
+                if (!response.ok) {
+                  showToast(data.mensaje || 'No se pudo eliminar la atención.', 'error');
+                  return;
+                }
+
+                showToast(data.mensaje, 'success');
+                await cargarAtencionesHoy();
+              } catch (error) {
+                showToast('Error al eliminar la atención.', 'error');
+              }
+            });
+          });
+        } catch (error) {
+          atencionesList.innerHTML = '<li class="empty-state">No se pudo cargar la lista de hoy.</li>';
+        }
+      }
+
+      function printTodayReport() {
+        const currentRows = Array.from(document.querySelectorAll('.attendance-item'));
+        const rowsHtml = currentRows.length
+          ? currentRows
+              .map((row) => {
+                const dni = row.querySelector('.dni-chip')?.textContent || '';
+                const hora = row.querySelector('.time-badge')?.textContent || '';
+                const nombre = row.querySelector('strong')?.textContent || '';
+                return `<tr><td>${dni}</td><td>${nombre}</td><td>${hora}</td></tr>`;
+              })
+              .join('')
+          : '<tr><td colspan="3">No hay atenciones para hoy.</td></tr>';
+
+        const printWindow = window.open('', '_blank', 'width=900,height=700');
+        printWindow.document.write(`
+          <!doctype html>
+          <html lang="es">
+            <head>
+              <meta charset="utf-8" />
+              <title>Planilla de atenciones</title>
+              <style>
+                body { font-family: Arial, sans-serif; padding: 32px; color: #1f2a37; }
+                h1 { margin-bottom: 20px; }
+                table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+                th, td { border: 1px solid #dfe7ef; padding: 10px 12px; text-align: left; }
+                th { background: #edf2f7; }
+                .header { display: flex; justify-content: space-between; align-items: center; }
+              </style>
+            </head>
+            <body>
+              <div class="header">
+                <h1>Planilla de atenciones del día</h1>
+                <span>${new Date().toLocaleDateString('es-AR')}</span>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>DNI</th>
+                    <th>Nombre completo</th>
+                    <th>Hora</th>
+                  </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+              </table>
+            </body>
+          </html>
+        `);
+        printWindow.document.close();
+        setTimeout(() => printWindow.focus(), 200);
+        setTimeout(() => printWindow.print(), 400);
+      }
+
+      document.getElementById('buscarBtn').addEventListener('click', buscarPaciente);
+      document.getElementById('downloadPdfBtn').addEventListener('click', printTodayReport);
+
+      dniInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          buscarPaciente();
+        }
+      });
+
+      document.getElementById('registroForm').addEventListener('submit', (event) => {
+        event.preventDefault();
+        registrarAtencion();
+      });
+
+      setInterval(verificarCambioDeDia, 30000);
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) verificarCambioDeDia();
+      });
+
+      cargarAtencionesHoy();
+    </script>
+  </body>
+</html>
