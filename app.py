@@ -6,18 +6,45 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from flask import Flask, g, jsonify, render_template, request
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 ARGENTINA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_PATH = os.path.join(BASE_DIR, "consultorio.db")
+db_url = os.environ.get("DATABASE_URL")
+
+if db_url and db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
 
 app = Flask(__name__)
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url or f"sqlite:///{DATABASE_PATH.replace(os.sep, '/')}"
+
+
+class PostgresConnection:
+    def __init__(self, connection):
+        self.connection = connection
+        self.cursor = connection.cursor(cursor_factory=RealDictCursor)
+
+    def execute(self, statement, parameters=()):
+        self.cursor.execute(statement.replace("?", "%s"), parameters)
+        return self.cursor
+
+    def commit(self):
+        self.connection.commit()
+
+    def close(self):
+        self.cursor.close()
+        self.connection.close()
 
 
 def connect_db():
-    """Crea la conexión SQLite y activa el soporte de claves foráneas."""
+    """Conecta a PostgreSQL si DATABASE_URL está configurada; si no, usa SQLite."""
+    if db_url:
+        return PostgresConnection(psycopg2.connect(db_url))
+
     conn = sqlite3.connect(DATABASE_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
@@ -42,28 +69,52 @@ def close_db(_exception):
 def init_db():
     """Crea las tablas necesarias si aún no existen."""
     db = connect_db()
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS pacientes (
-            dni TEXT PRIMARY KEY,
-            nombre TEXT,
-            apellido TEXT,
-            telefono TEXT
+    if db_url:
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pacientes (
+                dni TEXT PRIMARY KEY,
+                nombre TEXT,
+                apellido TEXT,
+                telefono TEXT
+            )
+            """
         )
-        """
-    )
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS atenciones (
-            id_atencion INTEGER PRIMARY KEY AUTOINCREMENT,
-            dni_paciente TEXT,
-            fecha_atencion DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (dni_paciente) REFERENCES pacientes(dni)
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS atenciones (
+                id_atencion SERIAL PRIMARY KEY,
+                dni_paciente TEXT REFERENCES pacientes(dni),
+                fecha_atencion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
         )
-        """
-    )
+    else:
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pacientes (
+                dni TEXT PRIMARY KEY,
+                nombre TEXT,
+                apellido TEXT,
+                telefono TEXT
+            )
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS atenciones (
+                id_atencion INTEGER PRIMARY KEY AUTOINCREMENT,
+                dni_paciente TEXT,
+                fecha_atencion DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (dni_paciente) REFERENCES pacientes(dni)
+            )
+            """
+        )
     db.commit()
     db.close()
+
+
+init_db()
 
 
 @app.route("/")
@@ -156,7 +207,11 @@ def atenciones_hoy():
 
     resultados = []
     for fila in filas:
-        hora = datetime.strptime(fila["fecha_atencion"], "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+        fecha_atencion = fila["fecha_atencion"]
+        if isinstance(fecha_atencion, datetime):
+            hora = fecha_atencion.strftime("%H:%M")
+        else:
+            hora = datetime.strptime(fecha_atencion, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
         resultados.append(
             {
                 "id_atencion": fila["id_atencion"],
@@ -188,5 +243,4 @@ def eliminar_atencion(id_atencion):
 
 
 if __name__ == "__main__":
-    init_db()
     app.run(debug=True, host="127.0.0.1", port=5000)
