@@ -1,69 +1,80 @@
-import sqlite3
-from pathlib import Path
+import os
 
-DB_PATH = Path(__file__).resolve().parent / "consultorio.db"
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 def conectar():
-    """Conecta con la base de datos y activa claves foráneas."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Conecta a la base PostgreSQL configurada en el entorno."""
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL es obligatoria; configure la conexión de Supabase.")
+    return psycopg2.connect(DATABASE_URL)
+
+
+def consultar(query, parametros=(), uno=False):
+    conn = conectar()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(query, parametros)
+            if uno:
+                row = cursor.fetchone()
+                return dict(row) if row else None
+            return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def ejecutar(query, parametros=()):
+    conn = conectar()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(query, parametros)
+            filas_afectadas = cursor.rowcount
+        conn.commit()
+        return filas_afectadas
+    finally:
+        conn.close()
 
 
 def listar_pacientes():
     """Muestra todos los pacientes registrados."""
-    conn = conectar()
-    rows = conn.execute(
+    return consultar(
         "SELECT dni, nombre, apellido, telefono FROM pacientes ORDER BY apellido, nombre"
-    ).fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+    )
 
 
 def listar_atenciones():
     """Muestra todas las atenciones registradas con la fecha y el DNI."""
-    conn = conectar()
-    rows = conn.execute(
+    return consultar(
         """
         SELECT a.id_atencion, a.dni_paciente, p.nombre, p.apellido, a.fecha_atencion
         FROM atenciones a
         JOIN pacientes p ON p.dni = a.dni_paciente
         ORDER BY a.fecha_atencion DESC
         """
-    ).fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
+    )
 
 
 def buscar_paciente_por_dni(dni):
     """Busca un paciente por DNI y devuelve su registro."""
-    conn = conectar()
-    row = conn.execute(
-        "SELECT dni, nombre, apellido, telefono FROM pacientes WHERE dni = ?",
+    return consultar(
+        "SELECT dni, nombre, apellido, telefono FROM pacientes WHERE dni = %s",
         (dni,),
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+        uno=True,
+    )
 
 
 def eliminar_atencion(id_atencion):
     """Elimina una atención por su ID."""
-    conn = conectar()
-    cursor = conn.execute("DELETE FROM atenciones WHERE id_atencion = ?", (id_atencion,))
-    conn.commit()
-    conn.close()
-    return cursor.rowcount
+    return ejecutar("DELETE FROM atenciones WHERE id_atencion = %s", (id_atencion,))
 
 
 def eliminar_paciente(dni):
     """Elimina un paciente y sus atenciones asociadas."""
-    conn = conectar()
-    cursor = conn.execute("DELETE FROM pacientes WHERE dni = ?", (dni,))
-    conn.commit()
-    conn.close()
-    return cursor.rowcount
+    return ejecutar("DELETE FROM pacientes WHERE dni = %s", (dni,))
 
 
 def menu():

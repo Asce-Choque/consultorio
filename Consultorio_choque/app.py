@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import os
-import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from flask import Flask, g, jsonify, render_template, request
@@ -12,15 +11,12 @@ from psycopg2.extras import RealDictCursor
 ARGENTINA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE_PATH = os.path.join(BASE_DIR, "consultorio.db")
 db_url = os.environ.get("DATABASE_URL")
 
 if db_url and db_url.startswith("postgres://"):
     db_url = db_url.replace("postgres://", "postgresql://", 1)
 
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = db_url or f"sqlite:///{DATABASE_PATH.replace(os.sep, '/')}"
 
 
 class PostgresConnection:
@@ -41,14 +37,10 @@ class PostgresConnection:
 
 
 def connect_db():
-    """Conecta a PostgreSQL si DATABASE_URL está configurada; si no, usa SQLite."""
-    if db_url:
-        return PostgresConnection(psycopg2.connect(db_url))
-
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    return conn
+    """Conecta a PostgreSQL usando la URL configurada en el entorno."""
+    if not db_url:
+        raise RuntimeError("DATABASE_URL es obligatoria; configure la conexión de Supabase.")
+    return PostgresConnection(psycopg2.connect(db_url))
 
 
 def get_db():
@@ -69,45 +61,46 @@ def close_db(_exception):
 def init_db():
     """Crea las tablas necesarias si aún no existen."""
     db = connect_db()
-    if db_url:
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pacientes (
+            dni TEXT PRIMARY KEY,
+            nombre TEXT,
+            apellido TEXT,
+            telefono TEXT
+        )
+        """
+    )
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS atenciones (
+            id_atencion SERIAL PRIMARY KEY,
+            dni_paciente TEXT REFERENCES pacientes(dni),
+            fecha_atencion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    columna_fecha = db.execute(
+        """
+        SELECT data_type
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'atenciones'
+          AND column_name = 'fecha_atencion'
+        """
+    ).fetchone()
+    if columna_fecha and columna_fecha["data_type"] == "date":
         db.execute(
             """
-            CREATE TABLE IF NOT EXISTS pacientes (
-                dni TEXT PRIMARY KEY,
-                nombre TEXT,
-                apellido TEXT,
-                telefono TEXT
-            )
+            ALTER TABLE atenciones
+            ALTER COLUMN fecha_atencion TYPE TIMESTAMP WITHOUT TIME ZONE
+            USING fecha_atencion::timestamp
             """
         )
         db.execute(
             """
-            CREATE TABLE IF NOT EXISTS atenciones (
-                id_atencion SERIAL PRIMARY KEY,
-                dni_paciente TEXT REFERENCES pacientes(dni),
-                fecha_atencion TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-    else:
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS pacientes (
-                dni TEXT PRIMARY KEY,
-                nombre TEXT,
-                apellido TEXT,
-                telefono TEXT
-            )
-            """
-        )
-        db.execute(
-            """
-            CREATE TABLE IF NOT EXISTS atenciones (
-                id_atencion INTEGER PRIMARY KEY AUTOINCREMENT,
-                dni_paciente TEXT,
-                fecha_atencion DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (dni_paciente) REFERENCES pacientes(dni)
-            )
+            ALTER TABLE atenciones
+            ALTER COLUMN fecha_atencion SET DEFAULT CURRENT_TIMESTAMP
             """
         )
     db.commit()
@@ -210,8 +203,10 @@ def atenciones_hoy():
         fecha_atencion = fila["fecha_atencion"]
         if isinstance(fecha_atencion, datetime):
             hora = fecha_atencion.strftime("%H:%M")
+        elif isinstance(fecha_atencion, date):
+            hora = "--:--"
         else:
-            hora = datetime.strptime(fecha_atencion, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+            hora = datetime.fromisoformat(fecha_atencion).strftime("%H:%M")
         resultados.append(
             {
                 "id_atencion": fila["id_atencion"],
