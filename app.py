@@ -13,7 +13,7 @@ ARGENTINA_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE_PATH = os.path.join(BASE_DIR, "consultorio.db")
+DATABASE_PATH = os.path.join(BASE_DIR, "Consultorio_choque", "consultorio.db")
 db_url = os.environ.get("DATABASE_URL")
 
 if db_url and db_url.startswith("postgres://"):

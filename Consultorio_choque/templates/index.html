@@ -14,10 +14,10 @@
       <header class="topbar">
         <div class="brand-row">
           <div class="brand">
-            <div class="brand-mark">C</div>
+            <span class="brand-accent" aria-hidden="true"></span>
             <div>
-              <h1>Consultorio</h1>
-              <p>Gestión de pacientes</p>
+              <h1>Consultorio Choque</h1>
+              <p>Gestion de Atenciones</p>
               <time id="currentDate" class="current-date"></time>
             </div>
           </div>
@@ -42,7 +42,13 @@
       <main class="main-grid">
         <section class="panel panel-primary">
           <div class="search-block">
-            <label for="dniInput">DNI del paciente</label>
+            <div class="label-with-help">
+              <label for="dniInput">DNI del paciente</label>
+              <span class="help-tip">
+                <button class="help-icon" type="button" aria-label="Ayuda sobre el ingreso del documento" aria-describedby="dniHelp">?</button>
+                <span class="help-tooltip" id="dniHelp" role="tooltip">Si el paciente se encuentra en la base de datos, al introducir el documento se añadirá al paciente a la planilla de atenciones automáticamente. Caso contrario se deberá cargar el nombre y apellido del paciente por primera vez para guardarlo en la base de datos.</span>
+              </span>
+            </div>
             <div class="input-row">
               <input id="dniInput" type="text" placeholder="Ingrese DNI" maxlength="12" />
               <button id="buscarBtn" type="button">Buscar</button>
